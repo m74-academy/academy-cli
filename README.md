@@ -18,21 +18,23 @@ environment through `uv run`, so one installation serves every module.
 
 ## Commands
 
-Run these inside a module folder:
+Run these inside a module folder; `academy --help` (or `academy` alone) lists them with examples:
 
 ```console
 academy test 1 2     # check chapter 1, lesson 2
+academy test 1 2 --all  # show every failing check, not only the first
 academy test 1       # check every coding lesson in chapter 1
 academy docs         # open the course preview
 academy health       # check Git, remotes, Python, uv, and module extras
-academy update       # upgrade academy; show how to get a newer course
+academy update       # upgrade academy and get a newer course release
 academy update --check  # only report available updates
 ```
 
 `academy update` upgrades the command itself with `uv tool upgrade m74-academy-cli`
-(on Windows it prints that command to run after `academy` exits). A newer course
-release lands in your own repository, so the command only prints its steps: commit
-your work, `git pull --no-rebase --no-edit upstream main`, then `uv sync --locked`.
+(on Windows it prints that command to run after `academy` exits). Inside a module
+with a newer course release, it runs `git pull --no-rebase --no-edit upstream main`
+and `uv sync --locked`. It never commits, discards, or pushes your work: uncommitted
+changes stop it before the pull, and a merge conflict names the files to fix.
 
 ## Module configuration
 
