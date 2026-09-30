@@ -51,6 +51,16 @@ class CourseTest(unittest.TestCase):
             (inner / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
             self.assertEqual(cli.find_root(inner), root)
 
+    def test_older_course_release_says_to_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pyproject.toml").write_text(
+                '[project]\nname = "m74-academy-module-1"\nversion = "0.7.5"\n', encoding="utf-8")
+            (root / "src").mkdir()
+            with self.assertRaisesRegex(ValueError, "m74-academy-module-1 0.7.5, an older course release"
+                                                    "(.|\n)*course-updates(.|\n)*uv run academy"):
+                cli.find_root(root / "src")
+
     def test_outside_a_module_is_a_clear_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(ValueError, "run academy inside your module folder"):
@@ -92,7 +102,7 @@ class UpdateTest(unittest.TestCase):
     CLI_URL = "https://github.com/m74-academy/academy-cli.git"
 
     def _update(self, tags: dict[str, str], dirty: bool = False, check_only: bool = False,
-                upgrade_code: int = 0, in_module: bool = True, system: str = "posix",
+                upgrade_code: int = 0, in_module: bool = True, windows: bool = False,
                 ) -> tuple[str, list[list[str]]]:
         """Run _update against fake Git answers; return its output and the commands it ran directly."""
         course = cli.Course(Path("."), "1.2.3", "m74-academy/module-9", {}, frozenset(), ()) if in_module else None
@@ -106,7 +116,7 @@ class UpdateTest(unittest.TestCase):
         with patch.object(cli, "_run_quiet", side_effect=_git_answers(tags, dirty)), \
                 patch.object(cli, "_cli_version", return_value="0.1.0"), \
                 patch.object(cli.subprocess, "run", side_effect=run), \
-                patch.object(cli.os, "name", system), \
+                patch.object(cli, "WINDOWS", windows), \
                 patch.object(cli, "_console", Console(file=output, width=200)):
             self.assertEqual(cli._update(course, check_only=check_only), 0)
         return output.getvalue(), ran
@@ -145,7 +155,7 @@ class UpdateTest(unittest.TestCase):
         self.assertNotIn("Course", text)
 
     def test_windows_prints_the_upgrade_instead_of_running_it(self) -> None:
-        text, ran = self._update({"upstream": "1.2.3", self.CLI_URL: "0.2.0"}, system="nt")
+        text, ran = self._update({"upstream": "1.2.3", self.CLI_URL: "0.2.0"}, windows=True)
         self.assertEqual(ran, [])
         self.assertIn("uv tool upgrade m74-academy-cli", text)
 

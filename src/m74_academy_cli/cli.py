@@ -50,10 +50,20 @@ def _read_project(folder: Path) -> dict | None:
 def find_root(start: Path | None = None) -> Path:
     """Return the nearest folder at or above start whose pyproject.toml has [tool.academy]."""
     here = (start or Path.cwd()).resolve()
+    older = None
     for folder in (here, *here.parents):
         project = _read_project(folder)
-        if project is not None and "academy" in project.get("tool", {}):
+        if project is None:
+            continue
+        if "academy" in project.get("tool", {}):
             return folder
+        if older is None and str(project.get("project", {}).get("name", "")).startswith("m74-academy-module-"):
+            older = project["project"]
+    if older is not None:
+        # A course release from before DEC-0044 carries its own command.
+        raise ValueError(f"This is {older['name']} {older.get('version', '')}, an older course release "
+                         "that has its own command.\nGet the course update to use the installed academy: "
+                         f"{GUIDES}course-updates.md\nUntil then, run: uv run academy …")
     raise ValueError("No course pyproject.toml here or in a parent folder; "
                      "run academy inside your module folder")
 
@@ -89,6 +99,7 @@ GUIDES = "https://github.com/m74-academy/community/blob/main/guides/"
 CLI_REPO = "m74-academy/academy-cli"
 CLI_DIST = "m74-academy-cli"
 CLI_URL = f"https://github.com/{CLI_REPO}.git"
+WINDOWS = os.name == "nt"
 # The module's own locked environment, not this tool's.
 MODULE_PYTHON = ["uv", "run", "--locked", "python"]
 # Health only inspects the environment; `uv sync --check` reports drift separately.
@@ -327,7 +338,7 @@ def _upgrade_tool() -> None:
     """Upgrade this uv tool, or print the command where it cannot replace itself."""
     command = ["uv", "tool", "upgrade", CLI_DIST]
     # ponytail: Windows locks the running academy.exe, so the student runs the upgrade there.
-    if os.name == "nt":
+    if WINDOWS:
         _console.print(f"\nClose this command, then run:  {' '.join(command)}", soft_wrap=True)
         return
     try:
