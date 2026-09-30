@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-09-30
+
+### Fixed
+
+- On Windows, `academy update` prints the `uv tool upgrade` step last, after the course
+  update, instead of "Close this command" before it.
+- "Could not reach GitHub" now says to check the connection and Git's GitHub sign-in
+  (`gh auth status`, `gh auth setup-git`); `academy health` gives the same fix on its WARN lines.
+- The PASS box says "Think questions", as the lessons do.
+- `academy health` names a non-GitHub `origin` and a missing `upstream` correctly, fixes a wrong
+  `upstream` with `git remote set-url`, and links the fork guide's remote repair steps.
+
+### Added
+
+- `academy test CHAPTER` says how many of the chapter's lessons pass.
+
 ## [0.3.0] — 2026-09-30
 
 ### Added

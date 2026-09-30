@@ -25,6 +25,8 @@ from rich.text import Text
 
 
 GUIDES = "https://github.com/m74-academy/community/blob/main/guides/"
+# ls-remote fails the same way offline and when Git is not signed in to GitHub.
+UNREACHABLE_FIX = "check your connection; then gh auth status, and gh auth setup-git if Git is not signed in"
 CLI_REPO = "m74-academy/academy-cli"
 CLI_DIST = "m74-academy-cli"
 CLI_URL = f"https://github.com/{CLI_REPO}.git"
@@ -148,12 +150,17 @@ def _repo_slug(url: str) -> str:
     return match.group(1).lower() if match else ""
 
 
-def _remote_slug(remote: str, root: Path) -> str:
-    """Return the "owner/name" of a Git remote, or "" when it is missing."""
+def _remote_url(remote: str, root: Path) -> str:
+    """Return the URL of a Git remote, or "" when it is missing."""
     url = _run_quiet(["git", "remote", "get-url", remote], root)
     if url is None or url.returncode != 0:
         return ""
-    return _repo_slug(url.stdout)
+    return url.stdout.strip()
+
+
+def _remote_slug(remote: str, root: Path) -> str:
+    """Return the "owner/name" of a GitHub remote, or "" when it is missing or not on GitHub."""
+    return _repo_slug(_remote_url(remote, root))
 
 
 def _latest_release(remote: str, root: Path) -> str | None:
@@ -285,6 +292,8 @@ def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = 
         return 1
     if failed:
         lines = ["Read the failed check above, edit the lesson, save, and rerun."]
+        if len(lessons) > 1:
+            lines.insert(0, f"{len(lessons) - len(failed)} of {len(lessons)} lessons pass.")
         page = _lesson_page(course, chapter, failed[0])
         if page:
             lines.append(f"Lesson: {page}")
@@ -292,7 +301,7 @@ def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = 
             lines.append(f"Every failing check:  academy test {chapter} {failed[0]} --all")
         _console.print(Panel(Text("\n".join(lines)), title="TRY AGAIN", border_style="yellow", expand=False))
         return 1
-    _console.print(Panel("Supplied checks passed.\nAnswer the lesson's transfer question next.",
+    _console.print(Panel("Supplied checks passed.\nAnswer the lesson's Think questions next.",
                          title="PASS", border_style="green", expand=False))
     return 0
 
@@ -337,19 +346,26 @@ def _git_checks(course: Course) -> tuple[list[Check], bool]:
         results.append(("FAIL", "This folder is not a Git clone of your fork", GUIDES + "fork-clone-setup.md"))
         return results, False
 
-    origin, upstream = _remote_slug("origin", root), _remote_slug("upstream", root)
+    repair = GUIDES + "fork-clone-setup.md#fix-the-remotes-of-an-existing-clone"
+    course_url = f"https://github.com/{course.course_repo}.git"
+    origin_url, upstream_url = _remote_url("origin", root), _remote_url("upstream", root)
+    origin = _repo_slug(origin_url)
     if origin == course.course_repo:
-        results.append(("FAIL", "origin is the course, not your fork", GUIDES + "fork-clone-setup.md"))
+        results.append(("FAIL", "origin is the course, not your fork", repair))
     elif origin:
         results.append(("OK", f"origin is your fork ({origin})", ""))
+    elif origin_url:
+        results.append(("FAIL", f"origin is not a GitHub fork ({origin_url})", repair))
     else:
-        results.append(("FAIL", "origin remote is missing", GUIDES + "fork-clone-setup.md"))
+        results.append(("FAIL", "origin remote is missing", repair))
 
-    if upstream == course.course_repo:
+    if _repo_slug(upstream_url) == course.course_repo:
         results.append(("OK", f"upstream is the course ({course.course_repo})", ""))
+    elif upstream_url:
+        results.append(("FAIL", f"upstream is {upstream_url}, not the course",
+                        f"git remote set-url upstream {course_url}"))
     else:
-        results.append(("FAIL", f"upstream is not {course.course_repo}",
-                        f"git remote add upstream https://github.com/{course.course_repo}.git"))
+        results.append(("FAIL", "upstream remote is missing", f"git remote add upstream {course_url}"))
     return results, True
 
 
@@ -378,7 +394,7 @@ def _version_checks(course: Course, *, can_reach_upstream: bool) -> list[Check]:
     installed = course.version
     latest = _latest_release("upstream", course.root) if can_reach_upstream else None
     if latest is None:
-        course_check = ("WARN", f"Course version {installed}; could not reach upstream to compare", "")
+        course_check = ("WARN", f"Course version {installed}; could not reach upstream to compare", UNREACHABLE_FIX)
     elif _newer(latest, installed):
         course_check = ("WARN", f"Course version {installed}; {latest} is available", "academy update")
     else:
@@ -386,7 +402,7 @@ def _version_checks(course: Course, *, can_reach_upstream: bool) -> list[Check]:
 
     cli_installed, cli_latest = _cli_version(), _latest_release(CLI_URL, course.root)
     if cli_latest is None:
-        cli_check = ("WARN", f"academy {cli_installed}; could not reach GitHub to compare", "")
+        cli_check = ("WARN", f"academy {cli_installed}; could not reach GitHub to compare", UNREACHABLE_FIX)
     elif _newer(cli_latest, cli_installed):
         cli_check = ("WARN", f"academy {cli_installed}; {cli_latest} is available", "academy update")
     else:
@@ -438,13 +454,12 @@ def _health(course: Course) -> int:
 
 # === UPDATE === #
 
-def _upgrade_tool() -> None:
-    """Upgrade this uv tool, or print the command where it cannot replace itself."""
+def _upgrade_tool() -> str:
+    """Upgrade this uv tool; on Windows return the step to print once everything else has finished."""
     command = ["uv", "tool", "upgrade", CLI_DIST]
-    # ponytail: Windows locks the running academy.exe, so the student runs the upgrade there.
+    # ponytail: Windows locks the running academy.exe, so the student runs the upgrade afterwards.
     if WINDOWS:
-        _console.print(f"\nClose this command, then run:  {' '.join(command)}", soft_wrap=True)
-        return
+        return f"\nWhen this command has finished, run:  {' '.join(command)}"
 
     try:
         result = subprocess.run(command, check=False)
@@ -454,8 +469,9 @@ def _upgrade_tool() -> None:
         _console.print(f"\nCould not upgrade academy. Run:  {' '.join(command)}\n"
                        f"If academy was not installed with uv tool, see {GUIDES}install-uv-and-git.md",
                        soft_wrap=True)
-        return
+        return ""
     _console.print("\nacademy is upgraded; the next command uses it.")
+    return ""
 
 
 def _pull_course(course: Course, latest: str) -> int:
@@ -528,11 +544,12 @@ def _update(course: Course | None, *, check_only: bool) -> int:
         _console.print(f"{'Course':<8} {course.version} ({_state(course_latest, course_behind)})",
                        soft_wrap=True)
 
+    last_step = ""
     if cli_behind:
         if check_only:
             _console.print(f"\nRun academy update to install academy {cli_latest}.")
         else:
-            _upgrade_tool()
+            last_step = _upgrade_tool()
 
     code = 0
     if course_behind:
@@ -545,9 +562,11 @@ def _update(course: Course | None, *, check_only: bool) -> int:
         _console.print("\n" + note, soft_wrap=True)
     elif not (course_behind or cli_behind):
         if course_latest is None or cli_latest is None:
-            _console.print("\nCould not reach GitHub to compare; check your connection and try again.")
+            _console.print(f"\nCould not reach GitHub to compare: {UNREACHABLE_FIX}.", soft_wrap=True)
         else:
             _console.print("\nEverything is up to date.")
+    if last_step:
+        _console.print(last_step, soft_wrap=True)
     return code
 
 

@@ -203,6 +203,12 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual(ran, [])
         self.assertIn("uv tool upgrade m74-academy-cli", text)
 
+    def test_windows_prints_the_upgrade_after_the_course_update(self) -> None:
+        """On Windows the upgrade step comes last, after the course pull and sync."""
+        text, ran = self._update({"upstream": "1.2.3 1.3.0", self.CLI_URL: "0.1.0 0.2.0"}, windows=True)
+        self.assertEqual(ran, [self.PULL, ["uv", "sync", "--locked"]])
+        self.assertGreater(text.index("When this command has finished"), text.index("Course updated to 1.3.0"))
+
     def test_up_to_date(self) -> None:
         """Nothing runs when both the tool and the course are current."""
         text, ran = self._update({"upstream": "1.2.3", self.CLI_URL: "0.1.0"})
@@ -268,6 +274,38 @@ class LessonCheckTest(unittest.TestCase):
             self.assertFalse(cli._file_loads(Path("/m/src/a.py"), Path("/m")))
         self.assertIn("YOUR FILE DOES NOT LOAD", output.getvalue())
         self.assertIn("SyntaxError: invalid syntax", output.getvalue())
+
+class HealthRemotesTest(unittest.TestCase):
+    def _checks(self, origin: str, upstream: str) -> list[cli.Check]:
+        """Run the Git checks against fake remotes inside a clone at the course root."""
+        root = Path(".").resolve()
+        course = cli.Course(root, "1.0.0", "m74-academy/module-9", {}, frozenset(), ())
+        remotes = {"origin": origin, "upstream": upstream}
+
+        def run(command, root_arg, timeout=30, env=None):
+            if command[:2] == ["git", "config"]:
+                return cli.subprocess.CompletedProcess(command, 0, "set\n", "")
+            if command[:2] == ["git", "rev-parse"]:
+                return cli.subprocess.CompletedProcess(command, 0, f"{root}\n", "")
+            url = remotes[command[-1]]
+            return cli.subprocess.CompletedProcess(command, 0 if url else 2, url + "\n", "")
+
+        with patch.object(cli.shutil, "which", return_value="/usr/bin/git"), \
+                patch.object(cli, "_run_quiet", side_effect=run):
+            return cli._git_checks(course)[0]
+
+    def test_non_github_origin_and_missing_upstream_are_named(self) -> None:
+        """A local origin is 'not a GitHub fork', and an absent upstream is 'missing'."""
+        names = [name for _, name, _ in self._checks("/tmp/fork.git", "")]
+        self.assertIn("origin is not a GitHub fork (/tmp/fork.git)", names)
+        self.assertIn("upstream remote is missing", names)
+
+    def test_wrong_upstream_gets_set_url(self) -> None:
+        """An upstream pointing elsewhere is fixed with set-url, not add."""
+        checks = self._checks("https://github.com/me/module-9.git", "https://github.com/other/x.git")
+        self.assertIn(("OK", "origin is your fork (me/module-9)", ""), checks)
+        self.assertIn("git remote set-url upstream https://github.com/m74-academy/module-9.git",
+                      [fix for _, _, fix in checks])
 
 class DocsPortTest(unittest.TestCase):
     def setUp(self) -> None:
