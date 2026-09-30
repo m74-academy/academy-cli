@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m74-academy-cli"
+version = "0.1.0"
+description = "The academy command for M74 Academy course modules: lesson checks, course preview, and setup health."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["rich>=15.0.0"]
+
+[project.scripts]
+academy = "m74_academy_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
