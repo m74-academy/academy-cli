@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Oldest supported and newest; the course modules use these two.
+        python: ["3.11", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+
+      - name: Tests
+        run: uv run --locked python -m unittest discover -s tests -v
+
+      # The way students get it: installed as a uv tool from the built package.
+      - name: Install as a uv tool
+        shell: bash
+        run: |
+          uv tool install .
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Run the installed command
+        shell: bash
+        run: |
+          academy --version
+          academy --help

@@ -4,16 +4,35 @@ The `academy` command used in M74 Academy course modules. It runs a module's
 lesson checks, opens its course preview, and checks the student's setup.
 Course material itself is private; this tool is MIT-licensed.
 
+## Install
+
+Once per computer, with [uv](https://docs.astral.sh/uv/) and Git installed:
+
+```console
+uv tool install git+https://github.com/m74-academy/academy-cli
+```
+
+If uv reports that its tool folder is not on your `PATH`, run `uv tool update-shell`
+and open a new terminal. The command runs each module's checks in that module's own
+environment through `uv run`, so one installation serves every module.
+
 ## Commands
 
 Run these inside a module folder:
 
 ```console
-uv run academy test 1 2     # check chapter 1, lesson 2
-uv run academy test 1       # check every coding lesson in chapter 1
-uv run academy docs         # open the course preview
-uv run academy health       # check Git, remotes, Python, uv, and module extras
+academy test 1 2     # check chapter 1, lesson 2
+academy test 1       # check every coding lesson in chapter 1
+academy docs         # open the course preview
+academy health       # check Git, remotes, Python, uv, and module extras
+academy update       # upgrade academy; show how to get a newer course
+academy update --check  # only report available updates
 ```
+
+`academy update` upgrades the command itself with `uv tool upgrade m74-academy-cli`
+(on Windows it prints that command to run after `academy` exits). A newer course
+release lands in your own repository, so the command only prints its steps: commit
+your work, `git pull --no-rebase --no-edit upstream main`, then `uv sync --locked`.
 
 ## Module configuration
 
@@ -32,3 +51,6 @@ checks = ["qt"]             # extra health checks
 Lesson `N.M` expects `src/chapter_0N/lesson_0M.py` and
 `tests/chapter_0N/test_lesson_0M.py`; written lessons expect
 `answers/chapter_0N/lesson_0M.md`. Available extra checks: `qt` (PySide6 starts).
+
+Compatible course releases: Module 1 0.8.0 and later, Module 2 0.2.0 and later.
+The setup guides it links to are for enrolled students.
