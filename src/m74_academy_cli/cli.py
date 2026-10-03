@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-
+# Setup guides; a module whose students can't open them sets its own `guides` in [tool.academy].
 GUIDES = "https://github.com/m74-academy/community/blob/main/guides/"
 # ls-remote fails the same way offline and when Git is not signed in to GitHub.
 UNREACHABLE_FIX = "check your connection; then gh auth status, and gh auth setup-git if Git is not signed in"
@@ -64,6 +64,7 @@ class Course:
     chapters: dict[int, dict[int, str]]
     written: frozenset[tuple[int, int]]
     checks: tuple[str, ...]
+    guides: str = GUIDES
 
 
 def _read_project(folder: Path) -> dict[str, Any] | None:
@@ -107,8 +108,9 @@ def load_course(root: Path) -> Course:
                     for chapter, titles in data["chapters"].items()}
         written = frozenset(tuple(int(n) for n in item.split(".")) for item in data.get("written", []))
         checks = tuple(data.get("checks", []))
+        guides = str(data.get("guides", GUIDES))
         course = Course(root, project["project"]["version"], data["course-repo"],
-                        chapters, written, checks)
+                        chapters, written, checks, guides)
     except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"Invalid [tool.academy] in {path}: {error!r}") from error
 
@@ -330,7 +332,7 @@ def _git_checks(course: Course) -> tuple[list[Check], bool]:
     """Check Git, its identity, and the fork remotes; also return whether the folder is the clone."""
     root = course.root
     if shutil.which("git") is None:
-        return [("FAIL", "Git is not installed", GUIDES + "install-uv-and-git.md")], False
+        return [("FAIL", "Git is not installed", course.guides + "install-uv-and-git.md")], False
 
     results: list[Check] = []
     for key in ("user.name", "user.email"):
@@ -343,10 +345,10 @@ def _git_checks(course: Course) -> tuple[list[Check], bool]:
     top = _run_quiet(["git", "rev-parse", "--show-toplevel"], root)
     inside = top is not None and top.returncode == 0 and Path(top.stdout.strip()).resolve() == root
     if not inside:
-        results.append(("FAIL", "This folder is not a Git clone of your fork", GUIDES + "fork-clone-setup.md"))
+        results.append(("FAIL", "This folder is not a Git clone of your fork", course.guides + "fork-clone-setup.md"))
         return results, False
 
-    repair = GUIDES + "fork-clone-setup.md#fix-the-remotes-of-an-existing-clone"
+    repair = course.guides + "fork-clone-setup.md#fix-the-remotes-of-an-existing-clone"
     course_url = f"https://github.com/{course.course_repo}.git"
     origin_url, upstream_url = _remote_url("origin", root), _remote_url("upstream", root)
     origin = _repo_slug(origin_url)
@@ -374,7 +376,7 @@ def _environment_checks(course: Course) -> tuple[list[Check], bool]:
     root = course.root
     synced = _run_quiet(["uv", "sync", "--locked", "--check", "--inexact", "--quiet"], root, timeout=60)
     if synced is None:
-        return [("FAIL", "uv is not installed or did not respond", GUIDES + "install-uv-and-git.md")], False
+        return [("FAIL", "uv is not installed or did not respond", course.guides + "install-uv-and-git.md")], False
     if synced.returncode != 0:
         return [("FAIL", "Project environment is out of date", "uv sync --locked")], False
 
@@ -481,7 +483,7 @@ def _pull_course(course: Course, latest: str) -> int:
     before the pull, and a merge conflict is left for the student to resolve.
     """
     root = course.root
-    guide = f"Guide: {GUIDES}course-updates.md"
+    guide = f"Guide: {course.guides}course-updates.md"
     status = _run_quiet(["git", "status", "--porcelain", "--untracked-files=no"], root)
     if status is None or status.stdout.strip():
         message = Text("You have uncommitted changes. Commit your work, then run academy update again:\n\n"

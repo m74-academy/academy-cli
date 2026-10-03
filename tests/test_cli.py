@@ -4,12 +4,11 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from rich.console import Console
 
 from m74_academy_cli import cli
-
 
 PROJECT = """[project]
 name = "m74-academy-module-9"
@@ -43,6 +42,15 @@ class CourseTest(unittest.TestCase):
             self.assertEqual(course.chapters, {1: {1: "Reading", 2: "Coding"}, 2: {1: "More"}})
             self.assertEqual(course.written, {(1, 1)})
             self.assertEqual(course.checks, ("qt",))
+
+    def test_guides_default_and_module_override(self) -> None:
+        """Setup guides default to the course-wide ones; a module can point at its own."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._module(Path(temporary).resolve())
+            self.assertEqual(cli.load_course(root).guides, cli.GUIDES)
+            own = 'guides = "https://github.com/m74-academy/module-0/blob/main/docs/setup/"'
+            (root / "pyproject.toml").write_text(PROJECT.format(checks=own), encoding="utf-8")
+            self.assertEqual(cli.load_course(root).guides, "https://github.com/m74-academy/module-0/blob/main/docs/setup/")
 
     def test_skips_pyproject_without_academy_table(self) -> None:
         """A nested pyproject.toml without [tool.academy] is not a module."""
@@ -252,8 +260,57 @@ class EnvironmentTest(unittest.TestCase):
             cli._test(course, 1, None)
 
 
-
 class LessonCheckTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.output = io.StringIO()
+        for patcher in (patch.object(cli, "_console", Console(file=self.output)),
+                        patch.object(cli, "_ensure_environment"),
+                        patch.object(cli, "_run_quiet", return_value=cli.subprocess.CompletedProcess([], 0, "", ""))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _lessons(self, *numbers: int) -> cli.Course:
+        """Write a starter and its test file for each coding lesson of chapter 1; lesson 1 is written."""
+        for number in numbers:
+            for path in (self.root / f"src/chapter_01/lesson_{number:02}.py",
+                         self.root / f"tests/chapter_01/test_lesson_{number:02}.py"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("", encoding="utf-8")
+        return cli.Course(self.root, "1.0.0", "m74-academy/module-9",
+                          {1: {1: "Reading", 2: "Coding", 3: "More"}}, frozenset({(1, 1)}), ())
+
+    def _pytest_codes(self, *codes: int):
+        """Patch the lesson pytest runs to exit with these codes, in order."""
+        results = [cli.subprocess.CompletedProcess([], code) for code in codes]
+        return patch.object(cli.subprocess, "run", side_effect=results)
+
+    def test_missing_answer_file_is_a_project_error(self) -> None:
+        """A written lesson without its answer file names the missing file."""
+        with self.assertRaisesRegex(ValueError, "Missing project file: .*lesson_01.md"):
+            cli._test(self._lessons(), 1, 1)
+
+    def test_missing_test_file_is_a_project_error(self) -> None:
+        """A coding lesson without its test file names the missing file and does not pass."""
+        course = self._lessons(2)
+        (self.root / "tests/chapter_01/test_lesson_02.py").unlink()
+        with self.assertRaisesRegex(ValueError, "Missing project file: .*test_lesson_02.py"):
+            cli._test(course, 1, 2)
+        self.assertNotIn("Supplied checks passed", self.output.getvalue())
+
+    def test_lesson_without_tests_is_an_error(self) -> None:
+        """A lesson whose test file collects nothing is a project error, not a pass."""
+        with self._pytest_codes(cli.PYTEST_NO_TESTS), self.assertRaisesRegex(ValueError, "No tests"):
+            cli._test(self._lessons(2), 1, 2)
+
+    def test_chapter_with_a_lesson_without_tests_does_not_pass(self) -> None:
+        """One lesson without tests stops a whole-chapter check before PASS."""
+        with self._pytest_codes(0, cli.PYTEST_NO_TESTS), self.assertRaisesRegex(ValueError, "No tests"):
+            cli._test(self._lessons(2, 3), 1, None)
+        self.assertNotIn("Supplied checks passed", self.output.getvalue())
+
     def test_lesson_page_is_found_by_number(self) -> None:
         """The lesson page is found from its chapter and lesson numbers, or "" without one."""
         with tempfile.TemporaryDirectory() as temporary:
@@ -275,24 +332,58 @@ class LessonCheckTest(unittest.TestCase):
         self.assertIn("YOUR FILE DOES NOT LOAD", output.getvalue())
         self.assertIn("SyntaxError: invalid syntax", output.getvalue())
 
+
 class HealthRemotesTest(unittest.TestCase):
-    def _checks(self, origin: str, upstream: str) -> list[cli.Check]:
-        """Run the Git checks against fake remotes inside a clone at the course root."""
+    def _git(self, origin: str, upstream: str, cloned: bool = True,
+             guides: str = cli.GUIDES) -> tuple[list[cli.Check], bool]:
+        """Run the Git checks against fake remotes, inside a clone at the course root or outside any clone."""
         root = Path(".").resolve()
-        course = cli.Course(root, "1.0.0", "m74-academy/module-9", {}, frozenset(), ())
+        course = cli.Course(root, "1.0.0", "m74-academy/module-9", {}, frozenset(), (), guides)
         remotes = {"origin": origin, "upstream": upstream}
 
         def run(command, root_arg, timeout=30, env=None):
             if command[:2] == ["git", "config"]:
                 return cli.subprocess.CompletedProcess(command, 0, "set\n", "")
             if command[:2] == ["git", "rev-parse"]:
-                return cli.subprocess.CompletedProcess(command, 0, f"{root}\n", "")
+                return cli.subprocess.CompletedProcess(command, 0 if cloned else 128, f"{root}\n" if cloned else "", "")
             url = remotes[command[-1]]
             return cli.subprocess.CompletedProcess(command, 0 if url else 2, url + "\n", "")
 
         with patch.object(cli.shutil, "which", return_value="/usr/bin/git"), \
                 patch.object(cli, "_run_quiet", side_effect=run):
-            return cli._git_checks(course)[0]
+            return cli._git_checks(course)
+
+    def _checks(self, origin: str, upstream: str) -> list[cli.Check]:
+        """Return only the Git checks of a clone at the course root."""
+        return self._git(origin, upstream)[0]
+
+    def test_folder_outside_a_clone_fails(self) -> None:
+        """A downloaded folder that is not a clone fails and is not treated as one."""
+        checks, inside = self._git("", "", cloned=False)
+        self.assertFalse(inside)
+        self.assertEqual(checks[-1][:2], ("FAIL", "This folder is not a Git clone of your fork"))
+
+    def test_fixes_link_to_the_module_guides(self) -> None:
+        """A remote problem's fix links to the module's own guides when it sets them."""
+        checks, _ = self._git("", "", guides="https://example.test/setup/")
+        fixes = [fix for status, name, fix in checks if name == "origin remote is missing"]
+        self.assertEqual(fixes, ["https://example.test/setup/fork-clone-setup.md#fix-the-remotes-of-an-existing-clone"])
+
+    def test_course_as_origin_fails(self) -> None:
+        """Cloning the course instead of the fork is named as a failure."""
+        checks = self._checks("git@github.com:m74-academy/module-9.git", "https://github.com/m74-academy/module-9.git")
+        self.assertIn("FAIL", [status for status, name, _ in checks if name == "origin is the course, not your fork"])
+
+    def test_any_failure_makes_health_exit_one(self) -> None:
+        """Health exits 1 when a check fails and 0 when none does."""
+        course = cli.Course(Path("."), "1.0.0", "m74-academy/module-9", {}, frozenset(), ())
+        for checks, expected in (([("OK", "fine", "")], 0), ([("OK", "fine", ""), ("FAIL", "broken", "fix")], 1)):
+            with patch.object(cli, "_git_checks", return_value=(checks, False)), \
+                    patch.object(cli, "_environment_checks", return_value=([], False)), \
+                    patch.object(cli, "_version_checks", return_value=[]), \
+                    patch.object(cli.shutil, "which", return_value="/usr/bin/tool"), \
+                    patch.object(cli, "_console", Console(file=io.StringIO())):
+                self.assertEqual(cli._health(course), expected)
 
     def test_non_github_origin_and_missing_upstream_are_named(self) -> None:
         """A local origin is 'not a GitHub fork', and an absent upstream is 'missing'."""
@@ -306,6 +397,7 @@ class HealthRemotesTest(unittest.TestCase):
         self.assertIn(("OK", "origin is your fork (me/module-9)", ""), checks)
         self.assertIn("git remote set-url upstream https://github.com/m74-academy/module-9.git",
                       [fix for _, _, fix in checks])
+
 
 class DocsPortTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -323,6 +415,51 @@ class DocsPortTest(unittest.TestCase):
         with patch.object(cli, "_port_is_free", return_value=False):
             with self.assertRaisesRegex(ValueError, "Stop another course preview"):
                 cli._docs_port()
+
+
+class DocsCommandTest(unittest.TestCase):
+    SERVE = ["uv", "run", "--locked", "--group", "docs", "zensical", "serve", "-a", "localhost:8000"]
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "pyproject.toml").write_text(PROJECT.format(checks=""), encoding="utf-8")
+        (self.root / "mkdocs.yml").write_text("site_name: Module 9\n", encoding="utf-8")
+        self.errors = io.StringIO()
+        for patcher in (patch.object(cli, "_console", Console(file=io.StringIO())),
+                        patch.object(cli, "_errors", Console(file=self.errors)),
+                        patch.object(cli, "find_root", return_value=self.root),
+                        patch.object(cli, "_docs_port", return_value=8000)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _main(self, *args: str, **run_options) -> tuple[int, cli.subprocess.CompletedProcess]:
+        """Run `academy docs` with args and a fake subprocess.run; return the exit code and the fake."""
+        with patch("sys.argv", ["academy", "docs", *args]), \
+                patch.object(cli.subprocess, "run", **run_options) as run:
+            return cli.main(), run
+
+    def test_docs_opens_the_browser_and_returns_the_server_code(self) -> None:
+        """academy docs serves from the module root with --open and returns the server's exit code."""
+        code, run = self._main(return_value=cli.subprocess.CompletedProcess([], 7))
+        self.assertEqual(code, 7)
+        run.assert_called_once_with([*self.SERVE, "--open"], cwd=self.root, check=False, env=ANY)
+
+    def test_ctrl_c_stops_the_preview_without_an_error(self) -> None:
+        """Ctrl+C ends the preview with exit code 0, and --no-open drops --open."""
+        code, run = self._main("--no-open", side_effect=KeyboardInterrupt)
+        self.assertEqual(code, 0)
+        run.assert_called_once_with(self.SERVE, cwd=self.root, check=False, env=ANY)
+
+    def test_missing_mkdocs_is_a_project_error(self) -> None:
+        """Without mkdocs.yml the command exits 2 and names the missing file."""
+        (self.root / "mkdocs.yml").unlink()
+        with self.assertRaises(SystemExit) as stopped:
+            self._main(return_value=cli.subprocess.CompletedProcess([], 0))
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn("Missing project file", self.errors.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "m74-academy-cli"
-version = "0.3.1"
+version = "0.3.2"
 description = "The academy command for M74 Academy course modules: lesson checks, course preview, and setup health."
 readme = "README.md"
 license = "MIT"

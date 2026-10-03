@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-10-03
+
+### Added
+
+- A module can set `guides` in `[tool.academy]` to the base URL of setup guides its students can open.
+  `academy health` fixes and the `academy update` guide link then point there, so a public module
+  never links to the private course-wide guides.
+
 ## [0.3.1] — 2026-09-30
 
 ### Fixed
