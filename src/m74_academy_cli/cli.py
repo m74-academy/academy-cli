@@ -216,11 +216,15 @@ def _ensure_environment(root: Path) -> None:
 # === TEST === #
 
 def _written_activity(course: Course, chapter: int, lesson: int) -> int:
-    """Point to the Markdown file of a written lesson; nothing is graded."""
+    """Point to the Markdown file of a written lesson, or say a reading lesson has nothing to check."""
     folder = f"chapter_{chapter:02}"
     answer = course.root / "answers" / folder / f"lesson_{lesson:02}.md"
     if not answer.is_file():
-        raise ValueError(f"Missing project file: {answer}")
+        message = Text(f"{course.chapters[chapter][lesson]}\n\n"
+                       "This lesson has no exercise: read it, then continue with the next lesson.\n"
+                       "There is nothing to check.")
+        _console.print(Panel(message, title="READING LESSON", border_style="cyan", expand=False))
+        return 0
 
     message = Text(f"{course.chapters[chapter][lesson]}\n\n"
                    f"Edit: {answer.relative_to(course.root)}\n"

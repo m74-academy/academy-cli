@@ -295,10 +295,11 @@ class LessonCheckTest(unittest.TestCase):
         results = [cli.subprocess.CompletedProcess([], code) for code in codes]
         return patch.object(cli.subprocess, "run", side_effect=results)
 
-    def test_missing_answer_file_is_a_project_error(self) -> None:
-        """A written lesson without its answer file names the missing file."""
-        with self.assertRaisesRegex(ValueError, "Missing project file: .*lesson_01.md"):
-            cli._test(self._lessons(), 1, 1)
+    def test_lesson_without_answer_file_is_a_reading_lesson(self) -> None:
+        """A non-coding lesson without an answer file has nothing to check and passes quietly."""
+        self.assertEqual(cli._test(self._lessons(), 1, 1), 0)
+        self.assertIn("READING LESSON", self.output.getvalue())
+        self.assertNotIn("PASS", self.output.getvalue())
 
     def test_missing_test_file_is_a_project_error(self) -> None:
         """A coding lesson without its test file names the missing file and does not pass."""
