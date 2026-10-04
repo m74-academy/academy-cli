@@ -43,6 +43,14 @@ class CourseTest(unittest.TestCase):
             self.assertEqual(course.written, {(1, 1)})
             self.assertEqual(course.checks, ("qt",))
 
+    def test_reads_gold_lessons(self) -> None:
+        """Gold lessons are read like written ones; a module without them has none."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._module(Path(temporary), 'gold = ["1.2", "2.1"]')
+            self.assertEqual(cli.load_course(root).gold, {(1, 2), (2, 1)})
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(cli.load_course(self._module(Path(temporary))).gold, frozenset())
+
     def test_guides_default_and_module_override(self) -> None:
         """Setup guides default to the course-wide ones; a module can point at its own."""
         with tempfile.TemporaryDirectory() as temporary:
@@ -272,7 +280,7 @@ class LessonCheckTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def _lessons(self, *numbers: int) -> cli.Course:
+    def _lessons(self, *numbers: int, gold: frozenset[tuple[int, int]] = frozenset()) -> cli.Course:
         """Write a starter and its test file for each coding lesson of chapter 1; lesson 1 is written."""
         for number in numbers:
             for path in (self.root / f"src/chapter_01/lesson_{number:02}.py",
@@ -280,7 +288,7 @@ class LessonCheckTest(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("", encoding="utf-8")
         return cli.Course(self.root, "1.0.0", "m74-academy/module-9",
-                          {1: {1: "Reading", 2: "Coding", 3: "More"}}, frozenset({(1, 1)}), ())
+                          {1: {1: "Reading", 2: "Coding", 3: "More"}}, frozenset({(1, 1)}), (), gold=gold)
 
     def _pytest_codes(self, *codes: int):
         """Patch the lesson pytest runs to exit with these codes, in order."""
@@ -310,6 +318,37 @@ class LessonCheckTest(unittest.TestCase):
         with self._pytest_codes(0, cli.PYTEST_NO_TESTS), self.assertRaisesRegex(ValueError, "No tests"):
             cli._test(self._lessons(2, 3), 1, None)
         self.assertNotIn("Supplied checks passed", self.output.getvalue())
+
+    def test_chapter_skips_gold_lessons_and_names_them(self) -> None:
+        """A chapter run checks Core lessons only and says which Gold lessons it skipped."""
+        with self._pytest_codes(0) as run:
+            self.assertEqual(cli._test(self._lessons(2, 3, gold=frozenset({(1, 3)})), 1, None), 0)
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("tests/chapter_01/test_lesson_02.py", run.call_args.args[0])
+        self.assertIn("Gold lessons not checked: 1.3", self.output.getvalue())
+
+    def test_gold_adds_gold_lessons_and_gold_sections(self) -> None:
+        """--gold checks Gold lessons too, and runs a lesson's Gold section file with its Core checks."""
+        course = self._lessons(2, 3, gold=frozenset({(1, 3)}))
+        (self.root / "tests/chapter_01/test_lesson_02_gold.py").write_text("", encoding="utf-8")
+        with self._pytest_codes(0, 0) as run:
+            self.assertEqual(cli._test(course, 1, None, gold=True), 0)
+        first, second = (call.args[0] for call in run.call_args_list)
+        self.assertIn("tests/chapter_01/test_lesson_02_gold.py", first)
+        self.assertIn("tests/chapter_01/test_lesson_03.py", second)
+
+    def test_lesson_without_gold_flag_skips_its_gold_section(self) -> None:
+        """Without --gold a lesson runs only its Core checks, even when it has a Gold section."""
+        course = self._lessons(2)
+        (self.root / "tests/chapter_01/test_lesson_02_gold.py").write_text("", encoding="utf-8")
+        with self._pytest_codes(0) as run:
+            cli._test(course, 1, 2)
+        self.assertNotIn("tests/chapter_01/test_lesson_02_gold.py", run.call_args.args[0])
+
+    def test_chapter_of_gold_lessons_needs_the_flag(self) -> None:
+        """A chapter whose coding lessons are all Gold says to add --gold."""
+        with self.assertRaisesRegex(ValueError, "only Gold lessons.*--gold"):
+            cli._test(self._lessons(2, 3, gold=frozenset({(1, 2), (1, 3)})), 1, None)
 
     def test_lesson_page_is_found_by_number(self) -> None:
         """The lesson page is found from its chapter and lesson numbers, or "" without one."""

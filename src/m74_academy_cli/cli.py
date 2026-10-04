@@ -38,7 +38,8 @@ EXAMPLES = """\
 typical session, inside your module folder:
   academy docs        open the course in your browser; keep it running
   academy test 1 2    check chapter 1, lesson 2 (in a second terminal)
-  academy test 1      check every coding lesson in chapter 1
+  academy test 1      check every Core coding lesson in chapter 1
+  academy test 1 --gold   also check the Gold lessons and Gold sections
   academy health      check your setup; each problem comes with a fix
   academy update      get the newest academy and course release
 """
@@ -65,6 +66,7 @@ class Course:
     written: frozenset[tuple[int, int]]
     checks: tuple[str, ...]
     guides: str = GUIDES
+    gold: frozenset[tuple[int, int]] = frozenset()
 
 
 def _read_project(folder: Path) -> dict[str, Any] | None:
@@ -98,6 +100,11 @@ def find_root(start: Path | None = None) -> Path:
                      "run academy inside your module folder")
 
 
+def _lesson_set(items: list[str]) -> frozenset[tuple[int, int]]:
+    """Read lesson numbers such as "1.3" into (chapter, lesson) pairs."""
+    return frozenset((int(chapter), int(lesson)) for chapter, lesson in (item.split(".") for item in items))
+
+
 def load_course(root: Path) -> Course:
     """Read and check the module's [tool.academy] table."""
     path = root / "pyproject.toml"
@@ -106,11 +113,12 @@ def load_course(root: Path) -> Course:
         data = project["tool"]["academy"]
         chapters = {int(chapter): dict(enumerate(titles, start=1))
                     for chapter, titles in data["chapters"].items()}
-        written = frozenset(tuple(int(n) for n in item.split(".")) for item in data.get("written", []))
+        written = _lesson_set(data.get("written", []))
+        gold = _lesson_set(data.get("gold", []))
         checks = tuple(data.get("checks", []))
         guides = str(data.get("guides", GUIDES))
         course = Course(root, project["project"]["version"], data["course-repo"],
-                        chapters, written, checks, guides)
+                        chapters, written, checks, guides, gold)
     except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"Invalid [tool.academy] in {path}: {error!r}") from error
 
@@ -239,8 +247,11 @@ def _file_loads(source: Path, root: Path) -> bool:
     return False
 
 
-def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool) -> bool | None:
-    """Run one coding lesson's pytest file; True when it passes, None when the file does not load."""
+def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool, gold: bool = False) -> bool | None:
+    """Run one coding lesson's pytest files; True when they pass, None when the source does not load.
+
+    With gold, the lesson's Gold section checks (test_lesson_NN_gold.py) run too, when it has them.
+    """
     root = course.root
     folder = f"chapter_{chapter:02}"
     source = root / "src" / folder / f"lesson_{lesson:02}.py"
@@ -248,20 +259,27 @@ def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool) 
     for path in (source, test):
         if not path.is_file():
             raise ValueError(f"Missing project file: {path}")
+    tests = [test]
+    gold_test = test.with_name(f"test_lesson_{lesson:02}_gold.py")
+    if gold and gold_test.is_file():
+        tests.append(gold_test)
 
-    title = Text(f"Chapter {chapter} / Lesson {lesson} — {course.chapters[chapter][lesson]}", style="bold cyan")
+    label = " (Gold)" if (chapter, lesson) in course.gold else ""
+    title = Text(f"Chapter {chapter} / Lesson {lesson} — {course.chapters[chapter][lesson]}{label}",
+                 style="bold cyan")
     _console.rule(title, align="left")
     paths = Table.grid(padding=(0, 2))
     paths.add_column(style="dim")
     paths.add_column()
     paths.add_row("Edit", Text(str(source.relative_to(root))))
-    paths.add_row("Tests", Text(str(test.relative_to(root))))
+    for path in tests:
+        paths.add_row("Tests", Text(str(path.relative_to(root))))
     _console.print(paths)
 
     if not _file_loads(source, root):
         return None
 
-    command = [*MODULE_PYTHON, "-m", "pytest", str(test.relative_to(root)),
+    command = [*MODULE_PYTHON, "-m", "pytest", *(str(path.relative_to(root)) for path in tests),
                "-v", "--tb=short", "--no-header", "-p", "no:cacheprovider"]
     if not show_all:
         # One failure at a time: stop at the first, and skip pytest's repeated summary.
@@ -272,8 +290,8 @@ def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool) 
     return code == 0
 
 
-def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = False) -> int:
-    """Check one lesson, or every coding lesson of a chapter."""
+def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = False, gold: bool = False) -> int:
+    """Check one lesson, or every Core coding lesson of a chapter; gold adds Gold lessons and sections."""
     _console.print("Project:", str(course.root), style="dim", soft_wrap=True)
     if (chapter, lesson) in course.written:
         return _written_activity(course, chapter, lesson)
@@ -281,12 +299,19 @@ def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = 
     if lesson is not None:
         lessons = [lesson]
     else:
-        lessons = [n for n in course.chapters[chapter] if (chapter, n) not in course.written]
+        coding = [n for n in course.chapters[chapter] if (chapter, n) not in course.written]
+        skipped = [n for n in coding if (chapter, n) in course.gold and not gold]
+        if coding and len(skipped) == len(coding):
+            raise ValueError(f"Chapter {chapter} has only Gold lessons; run: academy test {chapter} --gold")
+        if skipped:
+            numbers = ", ".join(f"{chapter}.{n}" for n in skipped)
+            _console.print(f"Gold lessons not checked: {numbers}. Add --gold to check them.", style="dim")
+        lessons = [n for n in coding if n not in skipped]
     if not lessons:
         raise ValueError(f"Chapter {chapter} has no coding lessons to check")
 
     _ensure_environment(course.root)
-    results = {number: _check_lesson(course, chapter, number, show_all=show_all) for number in lessons}
+    results = {number: _check_lesson(course, chapter, number, show_all=show_all, gold=gold) for number in lessons}
     failed = [number for number, passed in results.items() if not passed]
 
     if None in results.values():
@@ -300,7 +325,8 @@ def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = 
         if page:
             lines.append(f"Lesson: {page}")
         if not show_all:
-            lines.append(f"Every failing check:  academy test {chapter} {failed[0]} --all")
+            flag = " --gold" if gold else ""
+            lines.append(f"Every failing check:  academy test {chapter} {failed[0]} --all{flag}")
         _console.print(Panel(Text("\n".join(lines)), title="TRY AGAIN", border_style="yellow", expand=False))
         return 1
     _console.print(Panel("Supplied checks passed.\nAnswer the lesson's Think questions next.",
@@ -642,6 +668,8 @@ def _parser() -> argparse.ArgumentParser:
     test.add_argument("lesson", type=int, nargs="?")
     test.add_argument("--all", action="store_true", dest="show_all",
                       help="show every failing check, not only the first")
+    test.add_argument("--gold", action="store_true",
+                      help="also check Gold lessons and each lesson's Gold section")
     return parser
 
 
@@ -665,7 +693,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error(f"chapter must be one of {sorted(course.chapters)}")
     if args.lesson is not None and args.lesson not in course.chapters[args.chapter]:
         parser.error(f"chapter {args.chapter} has lessons 1-{max(course.chapters[args.chapter])}")
-    return _test(course, args.chapter, args.lesson, show_all=args.show_all)
+    return _test(course, args.chapter, args.lesson, show_all=args.show_all, gold=args.gold)
 
 
 def main() -> int:

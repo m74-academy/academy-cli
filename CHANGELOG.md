@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-04
+
+### Added
+
+- A module can list Gold lessons in `[tool.academy]` with `gold = ["1.3", ...]` (DEC-0052).
+  `academy test CHAPTER` then checks only the Core lessons and names the Gold ones it skipped.
+- `academy test --gold` also checks the Gold lessons, and runs each lesson's Gold section checks,
+  `tests/chapter_0N/test_lesson_0M_gold.py`, together with its Core checks.
+
 ## [0.3.2] — 2026-10-03
 
 ### Added
