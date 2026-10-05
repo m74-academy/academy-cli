@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,14 +71,14 @@ class CourseTest(unittest.TestCase):
             self.assertEqual(cli.find_root(inner), root)
 
     def test_older_course_release_says_to_update(self) -> None:
-        """A release from before DEC-0044 is named, with the update guide."""
+        """A release from before DEC-0044 is named, with the update commands."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "pyproject.toml").write_text(
                 '[project]\nname = "m74-academy-module-1"\nversion = "0.7.5"\n', encoding="utf-8")
             (root / "src").mkdir()
             with self.assertRaisesRegex(ValueError, "m74-academy-module-1 0.7.5, an older course release"
-                                                    "(.|\n)*course-updates(.|\n)*uv run academy"):
+                                                    "(.|\n)*git pull(.|\n)*uv run academy"):
                 cli.find_root(root / "src")
 
     def test_outside_a_module_is_a_clear_error(self) -> None:
@@ -118,6 +119,8 @@ def _git_answers(tags: dict[str, str], dirty: bool = False, unmerged: str = ""):
             return cli.subprocess.CompletedProcess(command, 0, " M src/a.py\n" if dirty else "", "")
         if command[:2] == ["git", "diff"]:
             return cli.subprocess.CompletedProcess(command, 0, unmerged, "")
+        if command[:2] in (["git", "rev-parse"], ["git", "config"], ["git", "show"]):
+            return cli.subprocess.CompletedProcess(command, 1, "", "")
         raise AssertionError(command)
     return run
 
@@ -136,7 +139,7 @@ class UpdateTest(unittest.TestCase):
 
         def run(command, check=False, **options):
             ran.append(command)
-            code = pull_code if command[:2] == ["git", "pull"] else upgrade_code if command[0] == "uv" else 0
+            code = pull_code if command[:2] == ["git", "merge"] else upgrade_code if command[0] == "uv" else 0
             return cli.subprocess.CompletedProcess(command, code)
 
         with patch.object(cli, "_run_quiet", side_effect=_git_answers(tags, dirty, unmerged)), \
@@ -154,13 +157,13 @@ class UpdateTest(unittest.TestCase):
         with patch.object(cli, "_run_quiet", side_effect=_git_answers({})):
             self.assertIsNone(cli._latest_release("upstream", Path(".")))
 
-    PULL = ["git", "pull", "--no-rebase", "--no-edit", "upstream", "main"]
+    PULL = [["git", "fetch", "upstream", "main"], ["git", "merge", "--no-edit", "FETCH_HEAD"]]
 
     def test_course_update_pulls_then_syncs(self) -> None:
         """A newer course release is pulled, then the project is synced."""
         text, ran = self._update({"upstream": "1.2.3 1.3.0", self.CLI_URL: "0.1.0"})
         self.assertIn("Course   1.2.3 (1.3.0 is available)", text)
-        self.assertEqual(ran, [self.PULL, ["uv", "sync", "--locked"]])
+        self.assertEqual(ran, [*self.PULL, ["uv", "sync", "--locked"]])
         self.assertIn("Course updated to 1.3.0", text)
         self.assertIn("git push", text)
 
@@ -175,7 +178,7 @@ class UpdateTest(unittest.TestCase):
         """A merge conflict lists its files and leaves the sync to the student."""
         text, ran = self._update({"upstream": "1.2.3 1.3.0", self.CLI_URL: "0.1.0"},
                                  pull_code=1, unmerged="README.md\n", expect=1)
-        self.assertEqual(ran, [self.PULL])
+        self.assertEqual(ran, self.PULL)
         self.assertIn("README.md", text)
         self.assertIn("git commit --no-edit", text)
         self.assertIn("uv sync --locked", text)
@@ -189,7 +192,7 @@ class UpdateTest(unittest.TestCase):
     def test_upgrades_the_tool_and_the_course_together(self) -> None:
         """The tool upgrade runs before the course pull and sync."""
         _, ran = self._update({"upstream": "1.2.3 1.3.0", self.CLI_URL: "0.1.0 0.2.0"})
-        self.assertEqual(ran, [["uv", "tool", "upgrade", "m74-academy-cli"], self.PULL, ["uv", "sync", "--locked"]])
+        self.assertEqual(ran, [["uv", "tool", "upgrade", "m74-academy-cli"], *self.PULL, ["uv", "sync", "--locked"]])
 
     def test_newer_academy_upgrades_the_tool_without_a_course_release(self) -> None:
         """A newer academy is installed when the course is current."""
@@ -222,7 +225,7 @@ class UpdateTest(unittest.TestCase):
     def test_windows_prints_the_upgrade_after_the_course_update(self) -> None:
         """On Windows the upgrade step comes last, after the course pull and sync."""
         text, ran = self._update({"upstream": "1.2.3 1.3.0", self.CLI_URL: "0.1.0 0.2.0"}, windows=True)
-        self.assertEqual(ran, [self.PULL, ["uv", "sync", "--locked"]])
+        self.assertEqual(ran, [*self.PULL, ["uv", "sync", "--locked"]])
         self.assertGreater(text.index("When this command has finished"), text.index("Course updated to 1.3.0"))
 
     def test_up_to_date(self) -> None:
@@ -230,6 +233,74 @@ class UpdateTest(unittest.TestCase):
         text, ran = self._update({"upstream": "1.2.3", self.CLI_URL: "0.1.0"})
         self.assertEqual(ran, [])
         self.assertIn("Everything is up to date.", text)
+
+
+class KeepStudentFilesTest(unittest.TestCase):
+    """A real Git merge: the student's solved lesson survives a course change to its starter."""
+
+    def _git(self, root: Path, *command: str) -> None:
+        cli.subprocess.run(["git", *command], cwd=root, check=True, capture_output=True)
+
+    def _write(self, root: Path, files: dict[str, str], message: str) -> None:
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text, encoding="utf-8")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", message)
+
+    def _update(self, attributes_in_first_release: bool) -> tuple[Path, str]:
+        """Release v1, let the student solve lesson 2, release v2, and run the course update."""
+        identity = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                    "GIT_COMMITTER_EMAIL": "t@t"}
+        temporary = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temporary, ignore_errors=True)
+        with patch.dict(cli.os.environ, identity):
+            course_repo, student = Path(temporary) / "course", Path(temporary) / "student"
+            course_repo.mkdir()
+            self._git(course_repo, "init", "-q", "-b", "main")
+            attributes = {".gitattributes": "src/chapter_*/lesson_*.py merge=ours\n"}
+            self._write(course_repo, {
+                **(attributes if attributes_in_first_release else {}),
+                "src/chapter_01/lesson_02.py": "def f():\n    pass\n",
+                "src/chapter_01/lesson_03.py": "def g():\n    pass\n",
+                "docs/lesson.md": "old\n",
+            }, "v1")
+            self._git(Path(temporary), "clone", "-q", "-o", "upstream", str(course_repo), str(student))
+            self._write(student, {"src/chapter_01/lesson_02.py": "def f():\n    return 'mine'\n"}, "solve")
+            self._write(course_repo, {
+                **attributes,
+                "src/chapter_01/lesson_02.py": "def f(padding):\n    pass\n",
+                "src/chapter_01/lesson_03.py": "def g(padding):\n    pass\n",
+                "docs/lesson.md": "new\n",
+            }, "v2")
+            course = cli.Course(student, "1.0.0", "m74-academy/module-9", {}, frozenset(), ())
+            output, real_run = io.StringIO(), cli.subprocess.run
+
+            def run(command, *args, **options):
+                if command[0] == "uv":
+                    return cli.subprocess.CompletedProcess(command, 0)
+                return real_run(command, *args, **options)
+
+            with patch.object(cli.subprocess, "run", side_effect=run), \
+                    patch.object(cli, "_console", Console(file=output, width=200)):
+                self.assertEqual(cli._pull_course(course, "1.1.0"), 0)
+        return student, output.getvalue()
+
+    def _assert_kept(self, student: Path, text: str) -> None:
+        self.assertIn("return 'mine'", (student / "src/chapter_01/lesson_02.py").read_text())
+        self.assertIn("padding", (student / "src/chapter_01/lesson_03.py").read_text())
+        self.assertEqual((student / "docs/lesson.md").read_text(), "new\n")
+        self.assertIn("YOUR LESSON CODE WAS KEPT", text)
+        self.assertIn("src/chapter_01/lesson_02.py", text)
+        self.assertNotIn("lesson_03.py", text)
+        self.assertIn("Course updated to 1.1.0", text)
+
+    def test_course_update_keeps_solved_lessons_and_lists_them(self) -> None:
+        self._assert_kept(*self._update(attributes_in_first_release=True))
+
+    def test_release_that_adds_gitattributes_keeps_solved_lessons(self) -> None:
+        """The release that adds .gitattributes applies it to its own merge."""
+        self._assert_kept(*self._update(attributes_in_first_release=False))
 
 
 class EnvironmentTest(unittest.TestCase):
@@ -262,8 +333,7 @@ class EnvironmentTest(unittest.TestCase):
 
     def test_chapter_without_coding_lessons_is_an_error(self) -> None:
         """A chapter of written lessons only has nothing to check."""
-        course = cli.Course(Path("."), "1.0.0", "m74-academy/module-9", {1: {1: "Reading"}},
-                            frozenset({(1, 1)}), ())
+        course = cli.Course(Path("."), "1.0.0", "m74-academy/module-9", {1: {1: "Reading"}}, frozenset({(1, 1)}), ())
         with self.assertRaisesRegex(ValueError, "no coding lessons"):
             cli._test(course, 1, None)
 
@@ -307,7 +377,7 @@ class LessonCheckTest(unittest.TestCase):
         (self.root / "tests/chapter_01/test_lesson_02.py").unlink()
         with self.assertRaisesRegex(ValueError, "Missing project file: .*test_lesson_02.py"):
             cli._test(course, 1, 2)
-        self.assertNotIn("Supplied checks passed", self.output.getvalue())
+        self.assertNotIn("Checks passed", self.output.getvalue())
 
     def test_lesson_without_tests_is_an_error(self) -> None:
         """A lesson whose test file collects nothing is a project error, not a pass."""
@@ -318,7 +388,7 @@ class LessonCheckTest(unittest.TestCase):
         """One lesson without tests stops a whole-chapter check before PASS."""
         with self._pytest_codes(0, cli.PYTEST_NO_TESTS), self.assertRaisesRegex(ValueError, "No tests"):
             cli._test(self._lessons(2, 3), 1, None)
-        self.assertNotIn("Supplied checks passed", self.output.getvalue())
+        self.assertNotIn("Checks passed", self.output.getvalue())
 
     def test_chapter_skips_gold_lessons_and_names_them(self) -> None:
         """A chapter run checks Core lessons only and says which Gold lessons it skipped."""

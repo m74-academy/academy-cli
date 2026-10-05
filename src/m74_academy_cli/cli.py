@@ -23,8 +23,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-# Setup guides; a module whose students can't open them sets its own `guides` in [tool.academy].
-GUIDES = "https://github.com/m74-academy/community/blob/main/guides/"
+# Setup guides live in the public Module 0; a module can set its own `guides` in [tool.academy].
+GUIDES = "https://github.com/m74-academy/module-0/blob/main/docs/setup/"
 # ls-remote fails the same way offline and when Git is not signed in to GitHub.
 UNREACHABLE_FIX = "check your connection; then gh auth status, and gh auth setup-git if Git is not signed in"
 CLI_REPO = "m74-academy/academy-cli"
@@ -94,8 +94,9 @@ def find_root(start: Path | None = None) -> Path:
     if older is not None:
         # A course release from before DEC-0044 carries its own command.
         raise ValueError(f"This is {older['name']} {older.get('version', '')}, an older course release "
-                         "that has its own command.\nGet the course update to use the installed academy: "
-                         f"{GUIDES}course-updates.md\nUntil then, run: uv run academy …")
+                         "that has its own command.\nTo use the installed academy, get the course update by hand:\n"
+                         "git pull --no-rebase --no-edit upstream main\nuv sync --locked\n"
+                         "Until then, run: uv run academy …")
     raise ValueError("No course pyproject.toml here or in a parent folder; "
                      "run academy inside your module folder")
 
@@ -111,8 +112,7 @@ def load_course(root: Path) -> Course:
     try:
         project = _read_project(root)
         data = project["tool"]["academy"]
-        chapters = {int(chapter): dict(enumerate(titles, start=1))
-                    for chapter, titles in data["chapters"].items()}
+        chapters = {int(chapter): dict(enumerate(titles, start=1)) for chapter, titles in data["chapters"].items()}
         written = _lesson_set(data.get("written", []))
         gold = _lesson_set(data.get("gold", []))
         checks = tuple(data.get("checks", []))
@@ -269,8 +269,7 @@ def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool, 
         tests.append(gold_test)
 
     label = " (Gold)" if (chapter, lesson) in course.gold else ""
-    title = Text(f"Chapter {chapter} / Lesson {lesson} — {course.chapters[chapter][lesson]}{label}",
-                 style="bold cyan")
+    title = Text(f"Chapter {chapter} / Lesson {lesson} — {course.chapters[chapter][lesson]}{label}", style="bold cyan")
     _console.rule(title, align="left")
     paths = Table.grid(padding=(0, 2))
     paths.add_column(style="dim")
@@ -333,8 +332,7 @@ def _test(course: Course, chapter: int, lesson: int | None, *, show_all: bool = 
             lines.append(f"Every failing check:  academy test {chapter} {failed[0]} --all{flag}")
         _console.print(Panel(Text("\n".join(lines)), title="TRY AGAIN", border_style="yellow", expand=False))
         return 1
-    _console.print(Panel("Supplied checks passed.\nAnswer the lesson's Think questions next.",
-                         title="PASS", border_style="green", expand=False))
+    _console.print(Panel("Checks passed.", title="PASS", border_style="green", expand=False))
     return 0
 
 
@@ -347,8 +345,7 @@ Check = tuple[str, str, str]
 def _check_qt(root: Path) -> Check:
     """Start a hidden Qt application with the project's PySide6."""
     probe = "from PySide6.QtWidgets import QApplication; QApplication([])"
-    result = _run_quiet([*INSPECT_PYTHON, "-c", probe], root, timeout=60,
-                        env=_module_env(QT_QPA_PLATFORM="offscreen"))
+    result = _run_quiet([*INSPECT_PYTHON, "-c", probe], root, timeout=60, env=_module_env(QT_QPA_PLATFORM="offscreen"))
     if result is not None and result.returncode == 0:
         return "OK", "Qt (PySide6) starts", ""
     return "FAIL", f"Qt (PySide6) could not start: {_last_error_line(result)}", "uv sync --locked"
@@ -464,8 +461,7 @@ def _health(course: Course) -> int:
     git_results, inside = _git_checks(course)
     environment_results, ready = _environment_checks(course)
     reaches_upstream = inside and _remote_slug("upstream", course.root) == course.course_repo
-    results = [*git_results, *environment_results,
-               *_version_checks(course, can_reach_upstream=reaches_upstream)]
+    results = [*git_results, *environment_results, *_version_checks(course, can_reach_upstream=reaches_upstream)]
 
     if inside:
         status = _run_quiet(["git", "status", "--porcelain"], course.root)
@@ -506,24 +502,70 @@ def _upgrade_tool() -> str:
     return ""
 
 
+def _git_lines(command: list[str], root: Path) -> list[str]:
+    """Output lines of a Git query, or none when it fails."""
+    result = _run_quiet(["git", *command], root)
+    return result.stdout.splitlines() if result is not None and result.returncode == 0 else []
+
+
+def _kept_files(root: Path, before: str) -> list[str]:
+    """Student files the merge kept although the course changed them too (merge=ours in .gitattributes)."""
+    course = _git_lines(["rev-parse", "--verify", "-q", "HEAD^2"], root)
+    base = _git_lines(["merge-base", before, *course], root) if course else []
+    if not base:
+        return []  # a fast-forward: the student had no commits of their own
+    theirs = set(_git_lines(["diff", "--name-only", base[0], course[0]], root))
+    both = [name for name in _git_lines(["diff", "--name-only", base[0], before], root) if name in theirs]
+    if not both:
+        return []
+    # Kept means the merge left the student's version exactly as it was.
+    changed = set(_git_lines(["diff", "--name-only", before, "HEAD", "--", *both], root))
+    return [name for name in both if name not in changed]
+
+
+def _use_incoming_attributes(root: Path) -> None:
+    """Apply the fetched release's .gitattributes to this merge.
+
+    Git reads merge attributes from the checkout before the merge, so the first release that adds
+    or changes .gitattributes would otherwise merge without it. .git/info/attributes takes precedence
+    and holds a copy of the course's file.
+    """
+    incoming = _run_quiet(["git", "show", "FETCH_HEAD:.gitattributes"], root)
+    target = _git_lines(["rev-parse", "--git-path", "info/attributes"], root)
+    if incoming is None or incoming.returncode != 0 or not target:
+        return
+    path = root / target[0]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(incoming.stdout, encoding="utf-8")
+
+
 def _pull_course(course: Course, latest: str) -> int:
     """Merge the newer course release from upstream into this repository, then sync it.
 
     It never commits, discards, or pushes the student's work: uncommitted changes stop it
-    before the pull, and a merge conflict is left for the student to resolve.
+    before the pull. Files the module marks merge=ours in .gitattributes (the student's lesson
+    code) keep the student's version even when the course changed them; the update lists them.
+    Any other conflict is left for the student to resolve.
     """
     root = course.root
-    guide = f"Guide: {course.guides}course-updates.md"
     status = _run_quiet(["git", "status", "--porcelain", "--untracked-files=no"], root)
     if status is None or status.stdout.strip():
         message = Text("You have uncommitted changes. Commit your work, then run academy update again:\n\n"
-                       'git add -A\ngit commit -m "Save my work before the course update"\n\n' + guide)
+                       'git add -A\ngit commit -m "Save my work before the course update"')
         _console.print(Panel(message, title="COMMIT FIRST", border_style="yellow", expand=False))
         return 1
 
+    before = _git_lines(["rev-parse", "HEAD"], root)
+    # The merge=ours driver keeps the student's side; Git reads drivers only from config, not the repo.
+    _run_quiet(["git", "config", "merge.ours.driver", "true"], root)
     _console.print(f"\nGetting course {latest} from upstream…")
-    pull = ["git", "pull", "--no-rebase", "--no-edit", "upstream", "main"]
-    if subprocess.run(pull, cwd=root, check=False, env=_module_env()).returncode != 0:
+    fetch = ["git", "fetch", "upstream", "main"]
+    if subprocess.run(fetch, cwd=root, check=False, env=_module_env()).returncode != 0:
+        _console.print(f"\nCould not get the course update: {UNREACHABLE_FIX}.", soft_wrap=True)
+        return 1
+    _use_incoming_attributes(root)
+    merge = ["git", "merge", "--no-edit", "FETCH_HEAD"]
+    if subprocess.run(merge, cwd=root, check=False, env=_module_env()).returncode != 0:
         unmerged = _run_quiet(["git", "diff", "--name-only", "--diff-filter=U"], root)
         files = unmerged.stdout.split() if unmerged is not None else []
         if files:
@@ -533,10 +575,18 @@ def _pull_course(course: Course, latest: str) -> int:
                        + "\n\nThen run:\n\ngit add -A\ngit commit --no-edit\nuv sync --locked\ngit push")
         else:
             message = "The course update did not finish; read the Git message above."
-        _console.print(Panel(Text(message + "\n\n" + guide), title="COURSE UPDATE STOPPED",
-                             border_style="yellow", expand=False))
+        _console.print(Panel(Text(message), title="COURSE UPDATE STOPPED", border_style="yellow", expand=False))
         return 1
 
+    kept = _kept_files(root, before[0]) if before else []
+    if kept:
+        message = ("The course changed these files, and you had changed them too, so your version was kept:\n\n"
+                   + "\n".join(kept)
+                   + "\n\nRead CHANGELOG.md for what changed in each lesson, then run its checks again,\n"
+                   "for example:  academy test 1 4\n\n"
+                   "To start a lesson over from the course's version instead (this replaces your code):\n"
+                   "git checkout upstream/main -- FILE")
+        _console.print(Panel(Text(message), title="YOUR LESSON CODE WAS KEPT", border_style="yellow", expand=False))
     sync = ["uv", "sync", "--locked"]
     if subprocess.run(sync, cwd=root, check=False, env=_module_env()).returncode != 0:
         _console.print("\nThe course is merged, but the project environment did not update. "
@@ -573,8 +623,7 @@ def _update(course: Course | None, *, check_only: bool) -> int:
     else:
         course_latest = _latest_release("upstream", course.root)
         course_behind = course_latest is not None and _newer(course_latest, course.version)
-        _console.print(f"{'Course':<8} {course.version} ({_state(course_latest, course_behind)})",
-                       soft_wrap=True)
+        _console.print(f"{'Course':<8} {course.version} ({_state(course_latest, course_behind)})", soft_wrap=True)
 
     last_step = ""
     if cli_behind:
@@ -672,8 +721,7 @@ def _parser() -> argparse.ArgumentParser:
     test.add_argument("lesson", type=int, nargs="?")
     test.add_argument("--all", action="store_true", dest="show_all",
                       help="show every failing check, not only the first")
-    test.add_argument("--gold", action="store_true",
-                      help="also check Gold lessons and each lesson's Gold section")
+    test.add_argument("--gold", action="store_true", help="also check Gold lessons and each lesson's Gold section")
     return parser
 
 

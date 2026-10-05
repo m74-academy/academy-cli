@@ -5,6 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-10-05
+
+### Changed
+
+- Setup links in `academy health`, `academy update`, and error messages point to the public Module 0 setup
+  guides, the single source for every module. The community repository's copies are retired.
+- `academy update` no longer stops when the course changed a lesson you already solved. Files the module
+  marks `merge=ours` in `.gitattributes` keep your version, and the update lists them with the next step
+  (DEC-0053). It fetches the release first and applies the release's own `.gitattributes`, so the update that
+  first adds the file already keeps your code, and it lists only files it really left unchanged.
+- `academy update` messages no longer link to a course-updates guide; each one says what to do. An older course
+  release that carries its own command prints the update commands.
+- A passing `academy test` says only `Checks passed.`; it no longer tells you to answer Think questions,
+  which most lessons don't have.
+
 ## [0.4.1] — 2026-10-05
 
 ### Changed
