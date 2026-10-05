@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-10-05
+
+### Changed
+
+- `academy update` no longer shows Git's merge lines, such as `Auto-merging src/chapter_01/lesson_07.py`, when the
+  merge succeeds; they read as if a kept lesson had changed. A failed merge still shows them.
+
 ## [0.4.2] — 2026-10-05
 
 ### Changed

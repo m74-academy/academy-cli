@@ -565,7 +565,10 @@ def _pull_course(course: Course, latest: str) -> int:
         return 1
     _use_incoming_attributes(root)
     merge = ["git", "merge", "--no-edit", "FETCH_HEAD"]
-    if subprocess.run(merge, cwd=root, check=False, env=_module_env()).returncode != 0:
+    # Git's own lines ("Auto-merging lesson_07.py") read as if a kept file had changed: show them only on failure.
+    merged = subprocess.run(merge, cwd=root, check=False, env=_module_env(), capture_output=True, text=True)
+    if merged.returncode != 0:
+        _console.print((merged.stdout or "") + (merged.stderr or ""), soft_wrap=True, markup=False)
         unmerged = _run_quiet(["git", "diff", "--name-only", "--diff-filter=U"], root)
         files = unmerged.stdout.split() if unmerged is not None else []
         if files:
