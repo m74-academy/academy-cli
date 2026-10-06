@@ -23,8 +23,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-# Setup guides live in the public Module 0; a module can set its own `guides` in [tool.academy].
-GUIDES = "https://github.com/m74-academy/module-0/blob/main/docs/setup/"
+# Setup guides live in the public community repository; a module can set its own `guides` in [tool.academy].
+GUIDES = "https://github.com/m74-academy/community/blob/main/guides/"
 # ls-remote fails the same way offline and when Git is not signed in to GitHub.
 UNREACHABLE_FIX = "check your connection; then gh auth status, and gh auth setup-git if Git is not signed in"
 CLI_REPO = "m74-academy/academy-cli"

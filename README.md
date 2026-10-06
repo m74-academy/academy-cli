@@ -74,5 +74,5 @@ Lesson `N.M` expects `src/chapter_0N/lesson_0M.py` and
 `tests/chapter_0N/test_lesson_0M_gold.py`, run only with `--gold`. Available extra checks: `qt` (PySide6 starts).
 
 Compatible course releases: Module 0 0.1.0 and later, Module 1 0.8.0 and later, Module 2 0.2.0 and later.
-By default the setup guides it links to are Module 0's public `docs/setup/` pages; a module can set `guides` to
+By default the setup guides it links to are the public `guides/` pages of `m74-academy/community`; a module can set `guides` to
 another folder that holds its own `install-uv-and-git.md` and `fork-clone-setup.md`.

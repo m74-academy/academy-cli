@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-10-06
+
+### Changed
+
+- Setup links in `academy health`, `academy update`, and error messages point to the public `community` guides, the single source for every module (DEC-0054).
+
 ## [0.4.3] — 2026-10-05
 
 ### Changed

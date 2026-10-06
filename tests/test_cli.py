@@ -57,9 +57,9 @@ class CourseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = self._module(Path(temporary).resolve())
             self.assertEqual(cli.load_course(root).guides, cli.GUIDES)
-            own = 'guides = "https://github.com/m74-academy/module-0/blob/main/docs/setup/"'
+            own = 'guides = "https://example.test/guides/"'
             (root / "pyproject.toml").write_text(PROJECT.format(checks=own), encoding="utf-8")
-            self.assertEqual(cli.load_course(root).guides, "https://github.com/m74-academy/module-0/blob/main/docs/setup/")
+            self.assertEqual(cli.load_course(root).guides, "https://example.test/guides/")
 
     def test_skips_pyproject_without_academy_table(self) -> None:
         """A nested pyproject.toml without [tool.academy] is not a module."""
