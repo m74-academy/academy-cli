@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-10-11
+
+### Changed
+
+- `academy test` starts Python with `-X warn_default_encoding`, so a lesson that opens a text file without
+  `encoding=` warns, or fails where the module's pytest settings make `EncodingWarning` an error.
+
 ## [0.4.4] — 2026-10-06
 
 ### Changed

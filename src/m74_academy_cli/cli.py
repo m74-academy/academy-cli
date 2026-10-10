@@ -282,7 +282,10 @@ def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool, 
     if not _file_loads(source, root):
         return None
 
-    command = [*MODULE_PYTHON, "-m", "pytest", *(str(path.relative_to(root)) for path in tests),
+    # warn_default_encoding makes open() without encoding= warn, as it would misread files on a
+    # Windows machine whose locale isn't UTF-8; a module's pytest settings may turn the warning into an error.
+    command = [*MODULE_PYTHON, "-X", "warn_default_encoding", "-m", "pytest",
+               *(str(path.relative_to(root)) for path in tests),
                "-v", "--tb=short", "--no-header", "-p", "no:cacheprovider"]
     if not show_all:
         # One failure at a time: stop at the first, and skip pytest's repeated summary.
