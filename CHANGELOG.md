@@ -5,6 +5,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-11-10
+
+### Added
+
+- `academy test` checks a lesson whose project is several files, kept in a folder `src/chapter_NN/lesson_NN/`
+  in place of `lesson_NN.py`: it names the folder as the place to edit and checks each file in it loads.
+
+### Changed
+
+- `academy test` on a written activity no longer tells you to use the lesson's self-check: not every lesson has one,
+  and the lesson itself says how to review your answer.
+
+### Fixed
+
+- `academy --help` on Windows names the command `academy`, not the path to `python.exe` and the launcher script.
+
 ## [0.4.5] — 2026-10-11
 
 ### Changed

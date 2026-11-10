@@ -229,7 +229,6 @@ def _written_activity(course: Course, chapter: int, lesson: int) -> int:
     message = Text(f"{course.chapters[chapter][lesson]}\n\n"
                    f"Edit: {answer.relative_to(course.root)}\n"
                    "Open this Markdown file, write under each heading, and save.\n"
-                   "Use the lesson's self-check to review your answer.\n"
                    "This command does not read or grade your answer.")
     _console.print(Panel(message, title="WRITTEN ACTIVITY", border_style="cyan", expand=False))
     return 0
@@ -242,13 +241,15 @@ def _lesson_page(course: Course, chapter: int, lesson: int) -> str:
 
 
 def _file_loads(source: Path, root: Path) -> bool:
-    """Compile the student's file first, so a syntax error shows only its line, not pytest internals."""
-    compiled = _run_quiet([*MODULE_PYTHON, "-m", "py_compile", str(source.relative_to(root))], root)
-    if compiled is None or compiled.returncode == 0:
-        return True
-    message = Text(compiled.stderr.strip() + "\n\nFix this line, save, and run the check again.")
-    _console.print(Panel(message, title="YOUR FILE DOES NOT LOAD", border_style="red", expand=False))
-    return False
+    """Compile the student's file, or each file of a lesson folder, so a syntax error shows only its line."""
+    for path in sorted(source.rglob("*.py")) if source.is_dir() else [source]:
+        compiled = _run_quiet([*MODULE_PYTHON, "-m", "py_compile", str(path.relative_to(root))], root)
+        if compiled is None or compiled.returncode == 0:
+            continue
+        message = Text(compiled.stderr.strip() + "\n\nFix this line, save, and run the check again.")
+        _console.print(Panel(message, title="YOUR FILE DOES NOT LOAD", border_style="red", expand=False))
+        return False
+    return True
 
 
 def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool, gold: bool = False) -> bool | None:
@@ -259,9 +260,12 @@ def _check_lesson(course: Course, chapter: int, lesson: int, *, show_all: bool, 
     root = course.root
     folder = f"chapter_{chapter:02}"
     source = root / "src" / folder / f"lesson_{lesson:02}.py"
+    if not source.is_file() and source.with_suffix("").is_dir():
+        # A lesson whose project is several files, such as a plugin and its standalone package, is a folder.
+        source = source.with_suffix("")
     test = root / "tests" / folder / f"test_lesson_{lesson:02}.py"
     for path in (source, test):
-        if not path.is_file():
+        if not path.exists():
             raise ValueError(f"Missing project file: {path}")
     tests = [test]
     gold_test = test.with_name(f"test_lesson_{lesson:02}_gold.py")
@@ -712,7 +716,8 @@ def _docs(course: Course, *, open_browser: bool) -> int:
 # === CLI === #
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Read your M74 Academy course and check lesson exercises",
+    parser = argparse.ArgumentParser(prog="academy",
+                                     description="Read your M74 Academy course and check lesson exercises",
                                      epilog=EXAMPLES, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"academy {_cli_version()}")
     commands = parser.add_subparsers(dest="command")

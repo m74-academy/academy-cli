@@ -379,6 +379,19 @@ class LessonCheckTest(unittest.TestCase):
             cli._test(course, 1, 2)
         self.assertNotIn("Checks passed", self.output.getvalue())
 
+    def test_lesson_folder_is_checked_like_a_file(self) -> None:
+        """A lesson whose project is a folder, src/chapter_NN/lesson_NN/, is edited and checked as one lesson."""
+        course = self._lessons(2)
+        (self.root / "src/chapter_01/lesson_02.py").unlink()
+        package = self.root / "src/chapter_01/lesson_02/standalone"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        with self._pytest_codes(0):
+            self.assertEqual(cli._test(course, 1, 2), 0)
+        self.assertIn(str(Path("src/chapter_01/lesson_02")), self.output.getvalue())
+        compiled = [call.args[0][-1] for call in cli._run_quiet.call_args_list]
+        self.assertIn(str(Path("src/chapter_01/lesson_02/standalone/__init__.py")), compiled)
+
     def test_lesson_without_tests_is_an_error(self) -> None:
         """A lesson whose test file collects nothing is a project error, not a pass."""
         with self._pytest_codes(cli.PYTEST_NO_TESTS), self.assertRaisesRegex(ValueError, "No tests"):
@@ -395,7 +408,7 @@ class LessonCheckTest(unittest.TestCase):
         with self._pytest_codes(0) as run:
             self.assertEqual(cli._test(self._lessons(2, 3, gold=frozenset({(1, 3)})), 1, None), 0)
         self.assertEqual(run.call_count, 1)
-        self.assertIn("tests/chapter_01/test_lesson_02.py", run.call_args.args[0])
+        self.assertIn(str(Path("tests/chapter_01/test_lesson_02.py")), run.call_args.args[0])
         self.assertIn("Gold lessons not checked: 1.3", self.output.getvalue())
 
     def test_gold_adds_gold_lessons_and_gold_sections(self) -> None:
@@ -405,8 +418,8 @@ class LessonCheckTest(unittest.TestCase):
         with self._pytest_codes(0, 0) as run:
             self.assertEqual(cli._test(course, 1, None, gold=True), 0)
         first, second = (call.args[0] for call in run.call_args_list)
-        self.assertIn("tests/chapter_01/test_lesson_02_gold.py", first)
-        self.assertIn("tests/chapter_01/test_lesson_03.py", second)
+        self.assertIn(str(Path("tests/chapter_01/test_lesson_02_gold.py")), first)
+        self.assertIn(str(Path("tests/chapter_01/test_lesson_03.py")), second)
 
     def test_lesson_without_gold_flag_skips_its_gold_section(self) -> None:
         """Without --gold a lesson runs only its Core checks, even when it has a Gold section."""
